@@ -8,13 +8,3 @@ bricks
 chest
 clay
 coal_ore
-cobblestone
-crafting_table
-crimson_planks
-dark_oak_log
-dark_oak_planks
-diamond_ore
-diorite
-dirt
-dirt_path
-emerald_ore

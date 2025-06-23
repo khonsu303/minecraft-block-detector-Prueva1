@@ -7,62 +7,91 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 # Constants
-IMG_SIZE = 64
+IMG_SIZE = 128  # Aumentado de 64 a 128 para capturar más detalles
 BATCH_SIZE = 32
 
 def extract_features(img):
     """
-    Extrae características importantes de una imagen:
+    Extrae características mejoradas de una imagen:
     1. Gradientes (bordes y formas)
     2. Colores (histograma HSV)
+    3. Textura (GLCM)
+    4. Características de forma
     """
-    # Redimensiona la imagen a 84x84 píxeles
+    # Redimensiona la imagen
     img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
     
     # Convierte a escala de grises para analizar formas
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Calcula gradientes (bordes) en X e Y
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=1)
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=1)
+    # 1. Características de gradientes mejoradas
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     mag, ang = cv2.cartToPolar(gx, gy)
     
-    # Divide los ángulos en 9 bins (contenedores)
-    bins = np.int32(9 * ang / (2 * np.pi))
-    
-    # Calcula el histograma de gradientes
-    hist = np.zeros(9)
-    for i in range(9):
+    # Histograma de gradientes orientados (HOG)
+    bins = np.int32(16 * ang / (2 * np.pi))  # Aumentado de 9 a 16 bins
+    hist = np.zeros(16)
+    for i in range(16):
         hist[i] = np.sum(mag[bins == i])
-    
-    # Normaliza el histograma
     hist = hist / np.sum(hist)
     
-    # Añade características de color
+    # 2. Características de color mejoradas
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    color_hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
+    color_hist = cv2.calcHist([hsv], [0, 1], None, [12, 12], [0, 180, 0, 256])  # Aumentado de 8x8 a 12x12
     color_hist = cv2.normalize(color_hist, color_hist).flatten()
     
-    # Combina características de gradientes y color
-    features = np.concatenate([hist, color_hist])
+    # 3. Características de textura
+    # Calcula la matriz de co-ocurrencia de niveles de gris (GLCM)
+    glcm = np.zeros((8, 8), dtype=np.uint8)
+    for i in range(IMG_SIZE-1):
+        for j in range(IMG_SIZE-1):
+            glcm[gray[i,j]//32, gray[i+1,j]//32] += 1
+    glcm = glcm.flatten()
+    glcm = glcm / np.sum(glcm)
+    
+    # 4. Características de forma
+    # Encuentra contornos
+    _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Calcula características de forma
+    shape_features = []
+    if contours:
+        # Área
+        area = cv2.contourArea(contours[0])
+        # Perímetro
+        perimeter = cv2.arcLength(contours[0], True)
+        # Circularidad
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+        # Rectangularidad
+        x, y, w, h = cv2.boundingRect(contours[0])
+        rectangularity = area / (w * h) if w * h > 0 else 0
+        
+        shape_features = [area/(IMG_SIZE*IMG_SIZE), perimeter/(2*IMG_SIZE), circularity, rectangularity]
+    else:
+        shape_features = [0, 0, 0, 0]
+    
+    # Combina todas las características
+    features = np.concatenate([hist, color_hist, glcm, shape_features])
     
     return features
 
-def load_dataset(base_dir):
+def load_dataset(base_dir, progress_callback=None):
     """
-    Carga todas las imágenes del dataset:
-    1. Lee las carpetas de bloques
-    2. Procesa cada imagen
-    3. Extrae características
+    Carga todas las imágenes del dataset
     """
     images = []
     labels = []
     class_names = []
     
     # Obtiene todas las carpetas de bloques
-    block_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-    block_dirs = block_dirs[:20]  # Use first 20 folders(Estos son los numeros de archivos que se van a sumar )
-    print(f"Using these 20 block types: {block_dirs}")
+    block_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith('.') and not d.startswith('__') and d not in ['venv', 'node_modules', 'build', 'public', 'src', 'uploads']]
+    block_dirs = block_dirs[:10]  # Limitar a solo 10 tipos de bloques
+    if progress_callback:
+        progress_callback(f"Using {len(block_dirs)} block types: {block_dirs}")
+    else:
+        print(f"Using {len(block_dirs)} block types: {block_dirs}")
     
     # Procesa cada carpeta de bloques
     for class_idx, block_dir in enumerate(block_dirs):
@@ -77,7 +106,8 @@ def load_dataset(base_dir):
                     # Lee y procesa la imagen
                     img = cv2.imread(img_path)
                     if img is None:
-                        print(f"Could not read image: {img_path}")
+                        if progress_callback:
+                            progress_callback(f"Could not read image: {img_path}")
                         continue
                     
                     # Extrae características
@@ -87,24 +117,29 @@ def load_dataset(base_dir):
                     
                     # Muestra progreso cada 100 imágenes
                     if len(images) % 100 == 0:
-                        print(f"Processed {len(images)} images...")
+                        msg = f"Processed {len(images)} images..."
+                        if progress_callback:
+                            progress_callback(msg)
+                        else:
+                            print(msg)
                         
                 except Exception as e:
-                    print(f"Error loading image {img_path}: {e}")
+                    if progress_callback:
+                        progress_callback(f"Error loading image {img_path}: {e}")
     
     return np.array(images), np.array(labels), class_names
 
-def train_model():
+def train_model(progress_callback=None):
     """
-    Entrena el modelo de clasificación:
-    1. Carga los datos
-    2. Divide en entrenamiento y prueba
-    3. Entrena el modelo
-    4. Evalúa el rendimiento
+    Entrena el modelo de clasificación mejorado
+    Si se pasa progress_callback, se llama con mensajes de progreso.
     """
     # Carga el dataset
-    print("Loading dataset...")
-    X, y, class_names = load_dataset('.')
+    if progress_callback:
+        progress_callback("Cargando dataset...")
+    else:
+        print("Loading dataset...")
+    X, y, class_names = load_dataset('.', progress_callback=progress_callback)
     
     # Divide los datos (80% entrenamiento, 20% prueba)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -114,41 +149,56 @@ def train_model():
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
     
-    # Crea y entrena el modelo
-    print("Training model...")
+    # Crea y entrena el modelo mejorado
+    if progress_callback:
+        progress_callback("Entrenando modelo...")
+    else:
+        print("Training model...")
     model = RandomForestClassifier(
-        n_estimators=300,  # Increased from 200 to 300 for more classes (numero de arboles disponibles 100 por cada 10 bloques)
-        max_depth=15,      # Increased from 10 to 15 for more complex patterns (profundidad del arbol 5 POR CADA 10 bloques)
+        n_estimators=500,  # Aumentado para mejor precisión
+        max_depth=20,      # Aumentado para capturar más patrones
         min_samples_split=5,
         min_samples_leaf=2,
         random_state=42,
-        n_jobs=-1            # Usa todos los núcleos de CPU
+        n_jobs=-1,         # Usa todos los núcleos de CPU
+        class_weight='balanced'  # Maneja mejor el desbalance de clases
     )
     model.fit(X_train, y_train)
     
     # Evalúa el modelo
     train_score = model.score(X_train, y_train)
     test_score = model.score(X_test, y_test)
-    print(f"Training accuracy: {train_score:.2f}")
-    print(f"Testing accuracy: {test_score:.2f}")
+    if progress_callback:
+        progress_callback(f"Precisión entrenamiento: {train_score:.2f}")
+        progress_callback(f"Precisión prueba: {test_score:.2f}")
+    else:
+        print(f"Training accuracy: {train_score:.2f}")
+        print(f"Testing accuracy: {test_score:.2f}")
     
     # Muestra las características más importantes
     feature_importance = model.feature_importances_
-    print("\nTop 5 most important features:")
     top_indices = np.argsort(feature_importance)[-5:]
     for idx in top_indices:
-        print(f"Feature {idx}: {feature_importance[idx]:.4f}")
+        msg = f"Feature {idx}: {feature_importance[idx]:.4f}"
+        if progress_callback:
+            progress_callback(msg)
+        else:
+            print(msg)
     
     # Guarda el modelo y el escalador
     joblib.dump(model, 'minecraft_block_detector.joblib')
     joblib.dump(scaler, 'scaler.joblib')
-    print("\nModel saved as 'minecraft_block_detector.joblib'")
+    if progress_callback:
+        progress_callback("Modelo guardado como 'minecraft_block_detector.joblib'")
+    else:
+        print("\nModelo guardado como 'minecraft_block_detector.joblib'")
     
     # Guarda los nombres de las clases
     with open('class_names.txt', 'w') as f:
         for name in class_names:
             f.write(name + '\n')
-    
+    if progress_callback:
+        progress_callback("Entrenamiento finalizado")
     return model, scaler, class_names
 
 def predict_block(model, scaler, class_names, image_path):
@@ -162,7 +212,7 @@ def predict_block(model, scaler, class_names, image_path):
     # Lee la imagen
     img = cv2.imread(image_path)
     if img is None:
-        raise ValueError(f"Could not read image: {image_path}")
+        raise ValueError(f"No se pudo leer la imagen: {image_path}")
     
     # Extrae características
     features = extract_features(img)
@@ -191,8 +241,8 @@ if __name__ == "__main__":
     test_image = "test_image.jpg"
     if os.path.exists(test_image):
         predicted_block, confidence, top_3 = predict_block(model, scaler, class_names, test_image)
-        print(f"Predicted block: {predicted_block}")
-        print(f"Confidence: {confidence:.2f}")
-        print("\nTop 3 predictions:")
+        print(f"El bloque predecido es: {predicted_block}")
+        print(f"coicidencia: {confidence:.2f}")
+        print("\nTop 3 predicciones:")
         for block, conf in top_3:
             print(f"{block}: {conf:.2f}") 
