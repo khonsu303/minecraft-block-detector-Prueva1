@@ -2,28 +2,24 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 import cv2
 import numpy as np
-import joblib
 import os
 from werkzeug.utils import secure_filename
-from minecraft_block_detector import extract_features, predict_block, train_model
+import torch
+from minecraft_cnn_pytorch import MinecraftCNN, predict_block_pytorch
 import threading
 import queue
 
 app = Flask(__name__, static_folder='build', static_url_path='')
 CORS(app)  # Esto permite las peticiones desde el frontend
 
-# Cargar el modelo y el escalador
-try:
-    model = joblib.load('minecraft_block_detector.joblib')
-    scaler = joblib.load('scaler.joblib')
-    with open('class_names.txt', 'r') as f:
-        class_names = [line.strip() for line in f]
-    print("Modelo cargado exitosamente")
-except Exception as e:
-    print(f"Error al cargar el modelo: {str(e)}")
-    model = None
-    scaler = None
-    class_names = []
+# Cargar el modelo PyTorch
+with open('class_names.txt', 'r') as f:
+    class_names = [line.strip() for line in f]
+num_classes = len(class_names)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+pytorch_model = MinecraftCNN(num_classes).to(device)
+pytorch_model.load_state_dict(torch.load('minecraft_pytorch_model.pth', map_location=device))
+pytorch_model.eval()
 
 # Configuración para subir archivos
 UPLOAD_FOLDER = 'uploads'
@@ -45,9 +41,6 @@ def list_blocks():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    if model is None or scaler is None:
-        return jsonify({'error': 'El modelo no está cargado correctamente'}), 500
-
     if 'image' not in request.files:
         return jsonify({'error': 'No se encontró ninguna imagen'}), 400
     
@@ -61,8 +54,10 @@ def predict():
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
         
-        # Usar la función predict_block del script original
-        predicted_block, confidence, top_3_predictions = predict_block(model, scaler, class_names, filepath)
+        # Usar el modelo PyTorch
+        predicted_block, confidence, top_3_predictions = predict_block_pytorch(
+            pytorch_model, class_names, filepath
+        )
         
         # Eliminar la imagen temporal
         os.remove(filepath)
@@ -84,7 +79,7 @@ def train():
         def progress_callback(msg):
             q.put(msg)
         def run_training():
-            train_model(progress_callback=progress_callback)
+            # Implementa la lógica para entrenar el modelo PyTorch aquí
             q.put('DONE')
         threading.Thread(target=run_training).start()
         while True:
@@ -94,6 +89,10 @@ def train():
                 break
             yield f'data: {msg}\n\n'
     return Response(event_stream(), mimetype='text/event-stream')
+
+@app.route('/training-plot')
+def training_plot():
+    return send_from_directory('static', 'training_history_pytorch.png')
 
 @app.errorhandler(404)
 def not_found(e):

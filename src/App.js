@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Box,
@@ -19,6 +19,9 @@ import {
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import { Bar, Pie } from 'react-chartjs-2';
+import { Chart, BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcElement } from 'chart.js';
+Chart.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcElement);
 
 // Crear un tema personalizado
 const theme = createTheme({
@@ -109,6 +112,16 @@ function App() {
   const [error, setError] = useState(null);
   const [training, setTraining] = useState(false);
   const [trainProgress, setTrainProgress] = useState([]);
+  const [imgError, setImgError] = useState(false);
+  const [plotDate, setPlotDate] = useState(null);
+
+  useEffect(() => {
+    // Llama a un endpoint para obtener la fecha del archivo
+    fetch('http://localhost:5000/training-plot-date')
+      .then(res => res.json())
+      .then(data => setPlotDate(data.date))
+      .catch(() => setPlotDate(null));
+  }, []);
 
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
@@ -117,6 +130,9 @@ function App() {
       setLoading(true);
       setError(null);
       setPredictions(null);
+
+      // Simula un retardo de 2 segundos
+      await new Promise(r => setTimeout(r, 2000));
 
       const formData = new FormData();
       formData.append('image', file);
@@ -185,8 +201,54 @@ function App() {
               paragraph
               sx={{ mb: 4 }}
             >
-              Sube una imagen de un bloque de Minecraft y te diré qué tipo de bloque es
+              Sube una imagen de un bloque de Minecraft y te diré qué tipo de bloque es 
             </Typography>
+
+            {loading && (
+              <Box sx={{ my: 2 }}>
+                <CircularProgress color="primary" />
+                <Typography variant="h6" color="primary" sx={{ mt: 2 }}>
+                  Analizando imagen...
+                </Typography>
+              </Box>
+            )}
+
+            {/* Gráfico de entrenamiento */}
+            {!loading && !predictions && (
+              <Box sx={{ margin: '30px auto', maxWidth: 900 }}>
+                <Typography variant="h6" color="primary" gutterBottom>
+                  Gráfico de entrenamiento
+                </Typography>
+                {!imgError ? (
+                  <>
+                    <img
+                      src="http://localhost:5000/training-plot"
+                      alt="Gráfico de entrenamiento"
+                      style={{
+                        width: '100%',
+                        height: 'auto',
+                        minHeight: 400,
+                        border: '2px solid #4CAF50',
+                        background: '#222',
+                        borderRadius: 12,
+                        boxShadow: '0 4px 24px rgba(0,0,0,0.3)'
+                      }}
+                      onError={() => setImgError(true)}
+                    />
+                    {plotDate && (
+                      <div style={{ color: '#aaa', fontSize: 14, marginTop: 8 }}>
+                        Generado el: {plotDate}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ color: '#888', margin: '40px 0', fontSize: 18 }}>
+                    El gráfico aún no está disponible.<br />
+                    Entrena el modelo para generar el gráfico.
+                  </div>
+                )}
+              </Box>
+            )}
 
             <StyledPaper>
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
@@ -203,116 +265,147 @@ function App() {
                     },
                   }}
                 >
-                  Subir Imagen
+                  Subir imagen
                   <VisuallyHiddenInput type="file" onChange={handleImageUpload} accept="image/*" />
                 </Button>
-
-                {selectedImage && (
-                  <Card sx={{ maxWidth: 345, mt: 2, width: '100%' }}>
-                    <CardMedia
-                      component="img"
-                      height="300"
-                      image={selectedImage}
-                      alt="Bloque de Minecraft"
-                      sx={{ 
-                        objectFit: 'contain',
-                        backgroundColor: alpha(theme.palette.background.paper, 0.5),
-                      }}
-                    />
-                  </Card>
-                )}
-
-                {loading && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, my: 2 }}>
-                    <CircularProgress color="primary" />
-                    <Typography variant="h6">Analizando imagen...</Typography>
-                  </Box>
-                )}
-
-                {error && (
-                  <Typography 
-                    color="error" 
-                    sx={{ 
-                      mt: 2,
-                      p: 2,
-                      borderRadius: 2,
-                      backgroundColor: alpha(theme.palette.error.main, 0.1),
-                    }}
-                  >
-                    {error}
-                  </Typography>
-                )}
-
-                {predictions && (
-                  <Card sx={{ width: '100%', mt: 2 }}>
-                    <CardContent>
-                      <Typography 
-                        variant="h5" 
-                        gutterBottom
-                        sx={{
-                          color: theme.palette.primary.main,
-                          mb: 3,
-                        }}
-                      >
-                        Resultados
-                      </Typography>
-                      <List>
-                        {predictions.top_3_predictions.map((prediction, index) => (
-                          <ListItem 
-                            key={index}
-                            sx={{
-                              mb: 1,
-                              borderRadius: 2,
-                              backgroundColor: alpha(theme.palette.background.paper, 0.5),
-                              '&:hover': {
-                                backgroundColor: alpha(theme.palette.background.paper, 0.8),
-                              },
-                            }}
-                          >
-                            <ListItemText
-                              primary={
-                                <Typography variant="h6" color="primary">
-                                  {prediction[0]}
-                                </Typography>
-                              }
-                              secondary={
-                                <Typography variant="body2" color="text.secondary">
-                                  Confianza: {(prediction[1] * 100).toFixed(2)}%
-                                </Typography>
-                              }
-                            />
-                          </ListItem>
-                        ))}
-                      </List>
-                    </CardContent>
-                  </Card>
-                )}
-
-                <Button
-                  variant="contained"
-                  color="secondary"
-                  onClick={handleTrainModel}
-                  disabled={training}
-                  sx={{ mb: 3 }}
-                >
-                  {training ? 'Entrenando...' : 'Entrenar modelo'}
-                </Button>
-                {trainProgress.length > 0 && (
-                  <Paper sx={{ p: 2, mb: 3, backgroundColor: 'rgba(255,255,255,0.05)' }}>
-                    <Typography variant="h6" color="secondary" gutterBottom>
-                      Progreso del entrenamiento
-                    </Typography>
-                    <Box sx={{ maxHeight: 200, overflowY: 'auto', textAlign: 'left' }}>
-                      {trainProgress.map((msg, idx) => (
-                        <Typography key={idx} variant="body2" sx={{ color: msg.includes('finalizado') ? 'green' : 'inherit' }}>
-                          {msg}
-                        </Typography>
-                      ))}
-                    </Box>
-                  </Paper>
-                )}
               </Box>
             </StyledPaper>
+
+            {selectedImage && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 3 }}>
+                <Typography variant="subtitle1" color="primary" gutterBottom>
+                  Imagen analizada
+                </Typography>
+                <img
+                  src={selectedImage}
+                  alt="Imagen subida"
+                  style={{
+                    maxWidth: 320,
+                    maxHeight: 220,
+                    borderRadius: 12,
+                    border: '2px solid #4CAF50',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+                    marginBottom: 12,
+                    background: '#222'
+                  }}
+                />
+              </Box>
+            )}
+
+            {predictions && (
+              <>
+                <Card sx={{ width: '100%', mt: 2 }}>
+                  <CardContent>
+                    <Typography 
+                      variant="h5" 
+                      gutterBottom
+                      sx={{
+                        color: theme.palette.primary.main,
+                        mb: 3,
+                      }}
+                    >
+                      Resultados
+                    </Typography>
+                    <List>
+                      {predictions.top_3_predictions.map((prediction, index) => (
+                        <ListItem 
+                          key={index}
+                          sx={{
+                            mb: 1,
+                            borderRadius: 2,
+                            backgroundColor: alpha(theme.palette.background.paper, 0.5),
+                            '&:hover': {
+                              backgroundColor: alpha(theme.palette.background.paper, 0.8),
+                            },
+                          }}
+                        >
+                          <ListItemText
+                            primary={
+                              <Typography variant="h6" color="primary">
+                                {prediction[0]}
+                              </Typography>
+                            }
+                            secondary={
+                              <Typography variant="body2" color="text.secondary">
+                                Confianza: {(prediction[1] * 100).toFixed(2)}%
+                              </Typography>
+                            }
+                          />
+                        </ListItem>
+                      ))}
+                    </List>
+                  </CardContent>
+                </Card>
+                {/* Gráficos de resultados en horizontal */}
+                <Box
+                  sx={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    justifyContent: 'center',
+                    alignItems: 'flex-start',
+                    gap: 4,
+                    margin: '30px auto',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  {/* Gráfico de barras */}
+                  <Box sx={{ width: 400, minWidth: 300, height: 260, maxHeight: 300 }}>
+                    <Typography variant="h6" color="primary" gutterBottom>
+                      Top 3 predicciones (barras)
+                    </Typography>
+                    <Bar
+                      data={{
+                        labels: predictions.top_3_predictions.map(p => p[0]),
+                        datasets: [
+                          {
+                            label: 'Confianza (%)',
+                            data: predictions.top_3_predictions.map(p => (p[1] * 100).toFixed(2)),
+                            backgroundColor: ['#4CAF50', '#FFA000', '#1976D2'],
+                          },
+                        ],
+                      }}
+                      options={{
+                        indexAxis: 'y',
+                        scales: {
+                          x: { min: 0, max: 100, title: { display: true, text: 'Confianza (%)' } },
+                        },
+                        plugins: {
+                          legend: { display: false },
+                        },
+                        responsive: true,
+                        maintainAspectRatio: false,
+                      }}
+                      height={220}
+                    />
+                  </Box>
+                  {/* Gráfico de pastel */}
+                  <Box sx={{ width: 300, minWidth: 220, height: 260, maxHeight: 300 }}>
+                    <Typography variant="h6" color="primary" gutterBottom>
+                      Distribución de confianza (pastel)
+                    </Typography>
+                    <Pie
+                      data={{
+                        labels: predictions.top_3_predictions.map(p => p[0]),
+                        datasets: [
+                          {
+                            data: predictions.top_3_predictions.map(p => (p[1] * 100).toFixed(2)),
+                            backgroundColor: ['#4CAF50', '#FFA000', '#1976D2'],
+                          },
+                        ],
+                      }}
+                      options={{
+                        plugins: {
+                          legend: { position: 'bottom' },
+                        },
+                        responsive: true,
+                        maintainAspectRatio: false,
+                      }}
+                      height={220}
+                    />
+                  </Box>
+                </Box>
+              </>
+            )}
           </Box>
         </Container>
       </GradientBackground>
@@ -320,4 +413,4 @@ function App() {
   );
 }
 
-export default App; 
+export default App;
